@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Deepgram Live Transcription - Nova-3</title>
+    <script src="/socket.io/socket.io.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            max-width: 900px;
+            width: 100%;
+            padding: 40px;
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 2.5em;
+        }
+
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 1.1em;
+        }
+
+        .status-bar {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 20px;
+            padding: 15px;
+            background: #f5f5f5;
+            border-radius: 10px;
+        }
+
+        .status-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #ccc;
+            animation: pulse 2s infinite;
+        }
+
+        .status-indicator.connected {
+            background: #4caf50;
+        }
+
+        .status-indicator.disconnected {
+            background: #f44336;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .status-text {
+            color: #666;
+            font-weight: 500;
+        }
+
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 30px;
+            flex-wrap: wrap;
+        }
+
+        .input-group {
+            flex: 1;
+            min-width: 200px;
+        }
+
+        .input-group label {
+            display: block;
+            margin-bottom: 5px;
+            color: #333;
+            font-weight: 500;
+        }
+
+        .input-group input {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+
+        .input-group input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        button {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            min-width: 120px;
+        }
+
+        .btn-start {
+            background: #4caf50;
+            color: white;
+        }
+
+        .btn-start:hover {
+            background: #45a049;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(76, 175, 80, 0.4);
+        }
+
+        .btn-stop {
+            background: #f44336;
+            color: white;
+        }
+
+        .btn-stop:hover {
+            background: #da190b;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(244, 67, 54, 0.4);
+        }
+
+        .btn-start:disabled,
+        .btn-stop:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .transcription-area {
+            background: #f9f9f9;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            padding: 20px;
+            min-height: 300px;
+            max-height: 500px;
+            overflow-y: auto;
+        }
+
+        .transcription-text {
+            font-size: 18px;
+            line-height: 1.6;
+            color: #333;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+
+        .interim {
+            color: #999;
+            font-style: italic;
+        }
+
+        .final {
+            color: #333;
+            font-weight: 500;
+        }
+
+        .error-message {
+            background: #ffebee;
+            color: #c62828;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            border-left: 4px solid #c62828;
+        }
+
+        .info-box {
+            background: #e3f2fd;
+            color: #1976d2;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            border-left: 4px solid #1976d2;
+        }
+
+        .info-box p {
+            margin: 5px 0;
+        }
+
+        .example-urls {
+            margin-top: 10px;
+            font-size: 0.9em;
+        }
+
+        .example-urls a {
+            color: #1976d2;
+            text-decoration: none;
+            margin-right: 15px;
+        }
+
+        .example-urls a:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎤 Deepgram Live Transcription</h1>
+        <p class="subtitle">Using Nova-3 Model - Real-time Speech-to-Text</p>
+
+        <div class="status-bar">
+            <div class="status-indicator disconnected" id="statusIndicator"></div>
+            <span class="status-text" id="statusText">Disconnected</span>
+        </div>
+
+        <div id="errorContainer"></div>
+
+        <div class="info-box">
+            <p><strong>How to use:</strong></p>
+            <p>1. Click "Start Transcription" to begin</p>
+            <p>2. Allow microphone access when prompted</p>
+            <p>3. Speak into your microphone and watch the live transcription appear below</p>
+        </div>
+
+        <div class="controls">
+            <div style="display: flex; gap: 10px; align-items: center; width: 100%; justify-content: center;">
+                <button class="btn-start" id="startBtn" onclick="startTranscription()">Start Transcription</button>
+                <button class="btn-stop" id="stopBtn" onclick="stopTranscription()" disabled>Stop</button>
+            </div>
+        </div>
+
+        <div class="transcription-area">
+            <div class="transcription-text" id="transcriptionText">
+                Transcription will appear here...
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const socket = io();
+        let isTranscribing = false;
+        let finalTranscript = '';
+        let interimTranscript = '';
+        let mediaStream = null;
+        let audioContext = null;
+        let processor = null;
+        let source = null;
+
+        // Update status indicator
+        function updateStatus(connected, message) {
+            const indicator = document.getElementById('statusIndicator');
+            const statusText = document.getElementById('statusText');
+            
+            if (connected) {
+                indicator.classList.remove('disconnected');
+                indicator.classList.add('connected');
+            } else {
+                indicator.classList.remove('connected');
+                indicator.classList.add('disconnected');
+            }
+            
+            statusText.textContent = message || (connected ? 'Connected' : 'Disconnected');
+        }
+
+        // Show error message
+        function showError(message) {
+            const errorContainer = document.getElementById('errorContainer');
+            errorContainer.innerHTML = `<div class="error-message">${message}</div>`;
+            setTimeout(() => {
+                errorContainer.innerHTML = '';
+            }, 5000);
+        }
+
+        // Update transcription display
+        function updateTranscription() {
+            const textElement = document.getElementById('transcriptionText');
+            const displayText = finalTranscript + (interimTranscript ? `<span class="interim">${interimTranscript}</span>` : '');
+            
+            if (!displayText.trim()) {
+                textElement.textContent = 'Transcription will appear here...';
+            } else {
+                textElement.innerHTML = displayText;
+            }
+            
+            // Auto-scroll to bottom
+            const transcriptionArea = document.querySelector('.transcription-area');
+            transcriptionArea.scrollTop = transcriptionArea.scrollHeight;
+        }
+
+        // Socket event listeners
+        socket.on('connect', () => {
+            console.log('Connected to server');
+            updateStatus(true, 'Connected to server');
+        });
+
+        socket.on('disconnect', () => {
+            console.log('Disconnected from server');
+            updateStatus(false, 'Disconnected from server');
+        });
+
+        socket.on('status', (data) => {
+            updateStatus(data.connected, data.message);
+        });
+
+        socket.on('transcription', (data) => {
+            if (data.isFinal) {
+                finalTranscript += data.transcript + ' ';
+                interimTranscript = '';
+            } else {
+                interimTranscript = data.transcript;
+            }
+            updateTranscription();
+        });
+
+        socket.on('error', (data) => {
+            showError(data.message);
+            updateStatus(false, 'Error occurred');
+        });
+
+        // Start microphone capture and transcription
+        async function startTranscription() {
+            if (isTranscribing) {
+                return;
+            }
+
+            try {
+                // Request microphone access
+                mediaStream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        channelCount: 1,
+                        sampleRate: 16000,
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                    }
+                });
+
+                // Reset transcripts
+                finalTranscript = '';
+                interimTranscript = '';
+                updateTranscription();
+
+                // Start Deepgram connection
+                socket.emit('start-transcription', {});
+
+                // Set up audio processing
+                audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                    sampleRate: 16000
+                });
+
+                source = audioContext.createMediaStreamSource(mediaStream);
+                
+                // Create a script processor to capture audio data
+                processor = audioContext.createScriptProcessor(4096, 1, 1);
+
+                processor.onaudioprocess = (e) => {
+                    if (!isTranscribing) return;
+                    
+                    const inputData = e.inputBuffer.getChannelData(0);
+                    // Convert Float32Array to Int16Array (PCM 16-bit)
+                    const int16Data = new Int16Array(inputData.length);
+                    for (let i = 0; i < inputData.length; i++) {
+                        // Clamp and convert to 16-bit integer
+                        const s = Math.max(-1, Math.min(1, inputData[i]));
+                        int16Data[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+                    }
+                    
+                    // Send audio chunk to server
+                    socket.emit('audio-chunk', int16Data.buffer);
+                };
+
+                source.connect(processor);
+                processor.connect(audioContext.destination);
+
+                document.getElementById('startBtn').disabled = true;
+                document.getElementById('stopBtn').disabled = false;
+                isTranscribing = true;
+                updateStatus(true, 'Listening...');
+
+            } catch (error) {
+                console.error('Error accessing microphone:', error);
+                showError('Failed to access microphone. Please allow microphone permissions.');
+                updateStatus(false, 'Microphone access denied');
+            }
+        }
+
+        // Stop transcription
+        function stopTranscription() {
+            isTranscribing = false;
+
+            // Stop audio processing
+            if (processor) {
+                processor.disconnect();
+                processor = null;
+            }
+
+            if (source) {
+                source.disconnect();
+                source = null;
+            }
+
+            if (audioContext) {
+                audioContext.close();
+                audioContext = null;
+            }
+
+            // Stop microphone stream
+            if (mediaStream) {
+                mediaStream.getTracks().forEach(track => track.stop());
+                mediaStream = null;
+            }
+
+            // Stop Deepgram connection
+            socket.emit('stop-transcription');
+            
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('stopBtn').disabled = true;
+            
+            interimTranscript = '';
+            updateTranscription();
+            updateStatus(false, 'Stopped');
+        }
+    </script>
+</body>
+</html>
+

@@ -1,0 +1,23 @@
+{
+  "name": "deepgram-live-transcription",
+  "version": "1.0.0",
+  "description": "Live transcription using Deepgram Nova-3 model",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": [
+    "deepgram",
+    "transcription",
+    "live",
+    "nova-3"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@deepgram/sdk": "^3.5.0",
+    "express": "^4.18.2",
+    "socket.io": "^4.6.1",
+    "dotenv": "^16.3.1"
+  }
+}
