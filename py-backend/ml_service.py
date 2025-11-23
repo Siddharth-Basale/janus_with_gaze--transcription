@@ -192,27 +192,24 @@ def get_iris_relative_position(landmarks):
         return None, None
 
 
-def compute_concentration(gaze_ok, head_ok, blink_recent, occluded, noise_flag=False, gaze_distance=0.0):
-    """Compute concentration score with ultra-sensitive eyeball detection"""
-    # Heavily weighted toward gaze for eyeball-specific detection
+def compute_gaze_on_screen_percentage(gaze_distance, max_deviation=0.2):
+    """
+    Compute percentage of how much the gaze is on-screen (0-100%)
+    - gaze_distance: distance from calibrated center (0.0 = perfectly centered)
+    - max_deviation: maximum expected deviation (normalized, ~0.2 for relative position)
+    Returns: 0-100% where 100% = perfectly on screen, 0% = completely off screen
+    """
+    if gaze_distance is None or gaze_distance < 0:
+        return 0
     
-    # Gaze score: penalize based on distance from center (ultra-sensitive)
-    if gaze_ok:
-        gaze_score = 1.0
-    else:
-        # Gradual penalty based on distance - detects even slight eyeball deviations
-        # Normalize distance (assuming max deviation ~0.2 for relative position)
-        normalized_dist = min(gaze_distance / 0.2, 1.0)
-        # More aggressive penalty for eyeball shifts
-        gaze_score = max(0.0, 1.0 - normalized_dist * 0.9)  # Penalize up to 90%
+    # Normalize distance (0.0 to 1.0)
+    normalized_dist = min(gaze_distance / max_deviation, 1.0)
     
-    head_score = 1.0 if head_ok else 0.0
-    blink_pen = 0.0 if not blink_recent else 0.5
-    noise_pen = 1.0 if noise_flag else 0.0
-    base = 0.7 * gaze_score + 0.15 * head_score + 0.1 * (1.0 - blink_pen) + 0.05 * (1.0 - noise_pen)
-    if occluded:
-        base = 0.85
-    return int(np.clip(base * 100.0, 0, 100))
+    # Convert to percentage: 100% when centered (distance=0), 0% when at max deviation
+    # Use smooth curve: 100% * (1 - normalized_dist)
+    percentage = 100.0 * (1.0 - normalized_dist)
+    
+    return int(np.clip(percentage, 0, 100))
 
 
 class FrameRequest(BaseModel):
@@ -222,13 +219,11 @@ class FrameRequest(BaseModel):
 
 
 class FrameResponse(BaseModel):
-    concentration: int
-    status: str
-    gaze_direction: str
-    blink_detected: bool
-    eyes_closed: bool
+    gaze_on_screen_percentage: int  # 0-100% of how much gaze is on screen
+    status: str  # FOCUSED, PARTIAL, DISTRACTED, OFF_SCREEN, NO_FACE
+    gaze_direction: str  # CENTER, LEFT, RIGHT, UP, DOWN, UNKNOWN, NO_FACE
     calibrated: bool
-    smooth_score: int
+    smooth_score: int  # Same as gaze_on_screen_percentage (for compatibility)
 
 
 def process_frame(frame_data: bytes, session_id: str) -> Dict:
@@ -265,11 +260,10 @@ def process_frame(frame_data: bytes, session_id: str) -> Dict:
     if det.detections:
         face_conf = max([d.score[0] for d in det.detections])
     
-    occluded = False
-    blink_event = False
+    # Simplified: Only track gaze, nothing else
+    gaze_on_screen_percentage = 0
     gaze_dir = "UNKNOWN"
-    concentration = 0
-    eyes_closed = False
+    gaze_distance = None
     
     state['frame_count'] += 1
     now = time.time()
@@ -280,41 +274,8 @@ def process_frame(frame_data: bytes, session_id: str) -> Dict:
         
         lm = mesh.multi_face_landmarks[0].landmark
         
-        # EAR blink detection
-        left_ear = eye_aspect_ratio(lm, LEFT_EYE, w, h)
-        right_ear = eye_aspect_ratio(lm, RIGHT_EYE, w, h)
-        avg_ear = (left_ear + right_ear) / 2.0
-        
-        if avg_ear > 0 and avg_ear < config.EAR_BLINK_THRESHOLD:
-            state['blink_frames'] += 1
-            # Eyes closed timer
-            if state['eyes_closed_start'] is None:
-                state['eyes_closed_start'] = now
-            elif now - state['eyes_closed_start'] >= config.EYES_CLOSED_SECONDS:
-                eyes_closed = True
-        else:
-            if state['blink_frames'] >= config.BLINK_CONSEC_FRAMES:
-                if now - state['last_blink_time'] > config.BLINK_MIN_SEP:
-                    blink_event = True
-                    state['last_blink_time'] = now
-            state['blink_frames'] = 0
-            state['eyes_closed_start'] = None
-        
-        # Occlusion check
-        left_stats = eye_region_stats(gray, lm, LEFT_EYE, w, h)
-        right_stats = eye_region_stats(gray, lm, RIGHT_EYE, w, h)
-        if left_stats is None or right_stats is None:
-            occluded = True
-        else:
-            lmean, lvar = left_stats
-            rmean, rvar = right_stats
-            if (lvar < config.EYE_VARIANCE_THRESHOLD or lmean < config.EYE_MEAN_DARK) and \
-               (rvar < config.EYE_VARIANCE_THRESHOLD or rmean < config.EYE_MEAN_DARK):
-                occluded = True
-        
-        # Gaze detection (requires calibration) - improved accuracy
+        # ONLY GAZE TRACKING - ignore everything else
         avgx, avgy = get_iris_avg(lm)
-        gaze_distance = 0.0  # Initialize gaze distance
         if avgx is not None:
             # Get relative iris position for eyeball-specific detection
             rel_x, rel_y = get_iris_relative_position(lm)
@@ -323,7 +284,7 @@ def process_frame(frame_data: bytes, session_id: str) -> Dict:
                 # Collect calibration data (both absolute and relative)
                 state['calib_x'].append(avgx)
                 state['calib_y'].append(avgy)
-                if rel_x is not None:
+                if rel_x is not None and rel_y is not None:
                     state['calib_rel_x'].append(rel_x)
                     state['calib_rel_y'].append(rel_y)
                 if state['calib_start'] is None:
@@ -336,13 +297,26 @@ def process_frame(frame_data: bytes, session_id: str) -> Dict:
                     if len(state['calib_rel_x']) > 0:
                         state['baseline_rel_x'] = float(np.mean(state['calib_rel_x']))
                         state['baseline_rel_y'] = float(np.mean(state['calib_rel_y']))
+                    else:
+                        # Fallback if relative calibration failed
+                        state['baseline_rel_x'] = 0.5
+                        state['baseline_rel_y'] = 0.5
                     state['calibrated'] = True
                     print(f"Session {session_id} calibrated: baseline=({state['baseline_x']:.3f}, {state['baseline_y']:.3f})")
                     print(f"Relative baseline=({state['baseline_rel_x']:.3f}, {state['baseline_rel_y']:.3f}) [0.5 = centered]")
             else:
                 # EYEBALL-SPECIFIC DETECTION: Use relative iris position (independent of head movement)
-                if rel_x is None or state['baseline_rel_x'] is None:
-                    gaze_dir = "UNKNOWN"
+                if rel_x is None or rel_y is None or state['baseline_rel_x'] is None or state['baseline_rel_y'] is None:
+                    # Fallback to absolute position if relative fails
+                    dx = avgx - state['baseline_x']
+                    dy = avgy - state['baseline_y']
+                    gaze_distance = float(np.sqrt(dx**2 + dy**2))
+                    if abs(dx) <= config.GAZE_X_DELTA and abs(dy) <= config.GAZE_Y_DELTA:
+                        gaze_dir = "CENTER"
+                    elif abs(dx) > abs(dy):
+                        gaze_dir = "LEFT" if dx < 0 else "RIGHT"
+                    else:
+                        gaze_dir = "UP" if dy < 0 else "DOWN"
                 else:
                     # Method 1: Relative position (eyeball-specific) - PRIMARY METHOD
                     rel_dx = rel_x - state['baseline_rel_x']
@@ -368,7 +342,7 @@ def process_frame(frame_data: bytes, session_id: str) -> Dict:
                         if abs(combined_dx) <= config.GAZE_X_DELTA and abs(combined_dy) <= config.GAZE_Y_DELTA:
                             gaze_dir = "CENTER"
                         else:
-                            # Small deviation detected
+                            # Small deviation detected - be more lenient
                             if abs(combined_dx) > abs(combined_dy):
                                 gaze_dir = "LEFT" if combined_dx < 0 else "RIGHT"
                             else:
@@ -383,63 +357,51 @@ def process_frame(frame_data: bytes, session_id: str) -> Dict:
                     # Add to smoothing buffer
                     state['gaze_dir_buf'].append(gaze_dir)
                     
-                    # Apply temporal smoothing
+                    # Apply temporal smoothing - only if we have enough consistency
                     if len(state['gaze_dir_buf']) >= 2:
                         most_common = Counter(state['gaze_dir_buf']).most_common(1)[0][0]
-                        if Counter(state['gaze_dir_buf']).most_common(1)[0][1] >= 2:
+                        count = Counter(state['gaze_dir_buf']).most_common(1)[0][1]
+                        # Only smooth if majority agrees (at least 2 out of 3)
+                        if count >= 2:
                             gaze_dir = most_common
         
-        # Head position check
-        try:
-            nose = lm[1]
-            nose_x = nose.x
-            nose_y = nose.y
-            head_ok = (abs(nose_x - 0.5) < 0.22 and abs(nose_y - 0.5) < 0.18)
-        except Exception:
-            head_ok = False
-        
-        # Compute concentration with distance metric for better accuracy
-        gaze_ok = (gaze_dir == "CENTER")
-        concentration = compute_concentration(gaze_ok, head_ok, blink_event, occluded, False, gaze_distance)
+        # Compute gaze on-screen percentage
+        if gaze_distance is not None:
+            gaze_on_screen_percentage = compute_gaze_on_screen_percentage(gaze_distance)
+        else:
+            gaze_on_screen_percentage = 0
     else:
         # No face detected
-        concentration = 0
-        occluded = True
-        gaze_dir = "NO FACE"  # Match ml.py format
+        gaze_on_screen_percentage = 0
+        gaze_dir = "NO FACE"
         if state['no_face_start'] is None:
             state['no_face_start'] = now
         elif now - state['no_face_start'] >= config.NO_FACE_SECONDS:
             # Could signal to stop processing this session
             pass
     
-    # Update score buffer
-    state['score_buf'].append(concentration)
-    smooth_score = int(np.mean(state['score_buf'])) if len(state['score_buf']) > 0 else concentration
+    # Update score buffer with gaze percentage
+    state['score_buf'].append(gaze_on_screen_percentage)
+    smooth_percentage = int(np.mean(state['score_buf'])) if len(state['score_buf']) > 0 else gaze_on_screen_percentage
     
-    # Determine status - EXACTLY matching ml.py logic
+    # Simple status based on gaze percentage
     if not mesh.multi_face_landmarks or face_conf < config.FACE_DET_CONF:
-        status = "NO FACE"  # Note: space, not underscore
-    elif occluded:
-        status = "CONCENTRATED"  # When occluded, show as CONCENTRATED
+        status = "NO FACE"
+    elif smooth_percentage >= 80:
+        status = "FOCUSED"  # Looking at screen (80-100%)
+    elif smooth_percentage >= 50:
+        status = "PARTIAL"  # Partially looking (50-79%)
+    elif smooth_percentage >= 20:
+        status = "DISTRACTED"  # Looking away (20-49%)
     else:
-        # noisy has precedence if noise present (audio disabled in service, so skip)
-        # if noisy:
-        #     status = "NOISY"
-        if blink_event:
-            status = "BLINK"
-        elif smooth_score < 70:  # Ultra-sensitive threshold for eyeball detection
-            status = "DISTRACTED"
-        else:
-            status = "CONCENTRATED"  # When concentrated, show as CONCENTRATED
+        status = "OFF_SCREEN"  # Not looking at screen (0-19%)
     
     return {
-        'concentration': concentration,
+        'gaze_on_screen_percentage': smooth_percentage,  # Main metric: 0-100%
         'status': status,
         'gaze_direction': gaze_dir,
-        'blink_detected': blink_event,
-        'eyes_closed': eyes_closed,
         'calibrated': state['calibrated'],
-        'smooth_score': smooth_score,
+        'smooth_score': smooth_percentage,  # For compatibility
     }
 
 

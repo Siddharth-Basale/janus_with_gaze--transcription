@@ -2,7 +2,7 @@
 # Adjust these values to experiment with different settings
 
 # Frame Processing Configuration
-FRAME_PROCESSING_FPS = 15  # Frames per second to process (5-15 recommended for balance)
+FRAME_PROCESSING_FPS = 8  # Frames per second to process (5-15 recommended for balance)
 MAX_FRAME_WIDTH = 640  # Resize frames to this width (smaller = faster, less accurate)
 MAX_FRAME_HEIGHT = 480  # Resize frames to this height
 JPEG_QUALITY = 70  # JPEG compression quality (0-100, lower = smaller but less quality)
@@ -13,14 +13,14 @@ BLINK_CONSEC_FRAMES = 2
 FACE_DET_CONF = 0.45
 EYE_VARIANCE_THRESHOLD = 200.0   # occlusion check: variance too low => likely covered
 EYE_MEAN_DARK = 45.0             # occlusion check: mean too dark => covered
-GAZE_X_DELTA = 0.025             # threshold around calibrated center for LEFT/RIGHT (ultra-sensitive for eyeball detection)
-GAZE_Y_DELTA = 0.02              # threshold around calibrated center for UP/DOWN (ultra-sensitive for eyeball detection)
+GAZE_X_DELTA = 0.07              # threshold around calibrated center for LEFT/RIGHT (original from ml.py)
+GAZE_Y_DELTA = 0.06              # threshold around calibrated center for UP/DOWN (original from ml.py)
 GAZE_SMOOTH_WINDOW = 3           # frames to smooth gaze direction (reduced for faster response)
 EYEBALL_RELATIVE_THRESHOLD = 0.15  # threshold for iris position relative to eye corners (detects actual eyeball movement)
 SCORE_SMOOTH = 6
 NOISE_SENSITIVITY = 2.0          # how much above baseline RMS counts as noise
 EYES_CLOSED_SECONDS = 3.0        # display eyes closed if closed for this long
-NO_FACE_SECONDS = 100.0           # exit if no face detected this many seconds
+NO_FACE_SECONDS = 10.0            # exit if no face detected this many seconds (original from ml.py)
 BLINK_MIN_SEP = 0.35             # seconds between blink events
 
 # Calibration Configuration - EXACTLY matching ml.py

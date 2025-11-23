@@ -6,13 +6,11 @@
 import { mlConfig } from '../config/mlConfig';
 
 export interface FrameProcessingResult {
-  concentration: number;
-  status: string;
-  gaze_direction: string;
-  blink_detected: boolean;
-  eyes_closed: boolean;
+  gaze_on_screen_percentage: number;  // 0-100% of how much gaze is on screen
+  status: string;  // FOCUSED, PARTIAL, DISTRACTED, OFF_SCREEN, NO_FACE
+  gaze_direction: string;  // CENTER, LEFT, RIGHT, UP, DOWN, UNKNOWN, NO_FACE
   calibrated: boolean;
-  smooth_score: number;
+  smooth_score: number;  // Same as gaze_on_screen_percentage (for compatibility)
 }
 
 export interface FrameProcessorCallbacks {
@@ -37,7 +35,7 @@ export class FrameProcessor {
     this.canvas = document.createElement('canvas');
     this.ctx = this.canvas.getContext('2d')!;
     this.frameInterval = 1000 / mlConfig.frameRate; // ms between frames
-    
+
     // Connect to WebSocket
     this.connectWebSocket();
   }
@@ -45,11 +43,11 @@ export class FrameProcessor {
   private connectWebSocket() {
     const wsUrl = `ws://${window.location.hostname}:4000/ws/ml`;
     this.ws = new WebSocket(wsUrl);
-    
+
     this.ws.onopen = () => {
       console.log('[FrameProcessor] WebSocket connected');
     };
-    
+
     this.ws.onmessage = (event) => {
       try {
         const result: FrameProcessingResult = JSON.parse(event.data);
@@ -60,12 +58,12 @@ export class FrameProcessor {
         this.callbacks.onError?.(error as Error);
       }
     };
-    
+
     this.ws.onerror = (error) => {
       console.error('[FrameProcessor] WebSocket error:', error);
       this.callbacks.onError?.(new Error('WebSocket connection failed'));
     };
-    
+
     this.ws.onclose = () => {
       console.log('[FrameProcessor] WebSocket closed, reconnecting...');
       setTimeout(() => this.connectWebSocket(), 3000);
@@ -78,42 +76,42 @@ export class FrameProcessor {
   async processFrame(videoElement: HTMLVideoElement): Promise<void> {
     if (!this.isProcessing) return;
     if (!videoElement || videoElement.readyState < 2) return; // Not ready
-    
+
     const now = Date.now();
     if (now - this.lastFrameTime < this.frameInterval) return; // Too soon
-    
+
     // Skip if previous request pending and skipFramesIfBusy is enabled
     if (mlConfig.skipFramesIfBusy && this.pendingRequest) return;
-    
+
     this.lastFrameTime = now;
-    
+
     try {
       // Set canvas size (resize if needed)
       const videoWidth = videoElement.videoWidth;
       const videoHeight = videoElement.videoHeight;
-      
+
       if (videoWidth === 0 || videoHeight === 0) return;
-      
+
       // Calculate resize dimensions
       let width = videoWidth;
       let height = videoHeight;
-      
+
       if (width > mlConfig.maxWidth || height > mlConfig.maxHeight) {
         const scale = Math.min(mlConfig.maxWidth / width, mlConfig.maxHeight / height);
         width = Math.floor(width * scale);
         height = Math.floor(height * scale);
       }
-      
+
       this.canvas.width = width;
       this.canvas.height = height;
-      
+
       // Draw video frame to canvas
       this.ctx.drawImage(videoElement, 0, 0, width, height);
-      
+
       // Convert to JPEG
       const jpegData = this.canvas.toDataURL('image/jpeg', mlConfig.jpegQuality / 100);
       const base64Data = jpegData.split(',')[1]; // Remove data:image/jpeg;base64, prefix
-      
+
       // Send via WebSocket if connected, otherwise fallback to HTTP
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
         this.pendingRequest = true;
@@ -144,11 +142,11 @@ export class FrameProcessor {
           timestamp,
         }),
       });
-      
+
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
-      
+
       const result: FrameProcessingResult = await response.json();
       this.pendingRequest = false;
       this.callbacks.onResult?.(result);
@@ -163,10 +161,10 @@ export class FrameProcessor {
    */
   start(videoElement: HTMLVideoElement): void {
     if (this.isProcessing) return;
-    
+
     this.isProcessing = true;
     this.lastFrameTime = 0;
-    
+
     // Use requestVideoFrameCallback if available (Chrome 94+)
     if ('requestVideoFrameCallback' in HTMLVideoElement.prototype) {
       const processFrame = () => {
